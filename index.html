@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Interactive Map with Real-Time Updates</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      #map {
+        height: 100vh;
+      }
+
+      #settings-menu {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 1000;
+        background: white;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        width: 200px;
+        font-family: Arial, sans-serif;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+      }
+
+      #settings-menu label {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 14px;
+      }
+
+      #settings-menu select,
+      #settings-menu textarea,
+      #settings-menu button {
+        width: 100%;
+        margin-bottom: 10px;
+        padding: 5px;
+        font-size: 14px;
+      }
+
+      #settings-menu button {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+
+      #settings-menu button:hover {
+        background-color: #0056b3;
+      }
+
+      #legend {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background: white;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-family: Arial, sans-serif;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        width: 150px;
+      }
+
+      #legend h4 {
+        margin: 0 0 10px;
+        font-size: 16px;
+        text-align: center;
+      }
+
+      #legend .legend-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 5px;
+      }
+
+      #legend .legend-icon {
+        width: 20px;
+        height: 20px;
+        margin-right: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="settings-menu">
+      <label for="marker-icon">Select Marker Icon:</label>
+      <select id="marker-icon">
+        <option value="/pictures/red.png">Red Marker</option>
+        <option value="/pictures/blue.png">Blue Marker</option>
+        <option value="/pictures/green.png">Green Marker</option>
+        <option value="/pictures/yellow.png">Yellow Marker</option>
+      </select>
+
+      <label for="marker-info">Marker Info:</label>
+      <textarea
+        id="marker-info"
+        rows="3"
+        placeholder="Enter marker information..."
+      ></textarea>
+
+      <button id="place-marker">Place Marker</button>
+    </div>
+
+    <div id="legend">
+      <h4>Legend</h4>
+      <div class="legend-item">
+        <img src="/pictures/red.png" alt="Red Marker" class="legend-icon" />
+        <span>Red Marker: Gang HQ</span>
+      </div>
+      <div class="legend-item">
+        <img src="/pictures/blue.png" alt="Blue Marker" class="legend-icon" />
+        <span>Blue Marker: Drug Lab</span>
+      </div>
+      <div class="legend-item">
+        <img src="/pictures/green.png" alt="Green Marker" class="legend-icon" />
+        <span>Green Marker: ChopShop</span>
+      </div>
+      <div class="legend-item">
+        <img
+          src="/pictures/yellow.png"
+          alt="Yellow Marker"
+          class="legend-icon"
+        />
+        <span>Yellow Marker: Other</span>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+      const backendUrl = "http://45.147.99.5:3000";
+      const socket = io(backendUrl, { transports: ["websocket"] }); // Connect to the WebSocket server
+
+      const map = L.map("map", {
+        crs: L.CRS.Simple,
+        minZoom: -2,
+      });
+
+      const imageBounds = [
+        [0, 0],
+        [4115, 3029],
+      ];
+      const imageUrl = "/image.png";
+      L.imageOverlay(imageUrl, imageBounds).addTo(map);
+      map.fitBounds(imageBounds);
+
+      const markersMap = new Map();
+
+      async function deleteMarker(markerId) {
+        try {
+          const response = await fetch(`${backendUrl}/markers/${markerId}`, {
+            method: "DELETE",
+          });
+          if (!response.ok) throw new Error("Failed to delete marker");
+        } catch (error) {
+          console.error("Error deleting marker:", error);
+        }
+      }
+
+      async function saveMarker(markerData) {
+        try {
+          await fetch(`${backendUrl}/markers`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(markerData),
+          });
+        } catch (error) {
+          console.error("Error saving marker:", error);
+        }
+      }
+
+      function createMarker(latlng, iconUrl, id = null, info = '', photos = []) {
+    const markerId = id || '_' + Math.random().toString(36).substr(2, 9);
+
+    const icon = L.icon({
+        iconUrl,
+        iconSize: [30, 30],
+        iconAnchor: [15, 30],
+    });
+
+    const marker = L.marker(latlng, { icon: icon, draggable: true });
+    marker.addTo(map);
+
+    // Function to render the photo gallery
+    function renderPhotoGallery() {
+        if (!photos || photos.length === 0) {
+            return '<p>No photos uploaded yet.</p>';
+        }
+        return photos
+            .map(
+                (photo) =>
+                    `<div style="display: inline-block; margin-right: 10px; text-align: center;">
+                        <img src="/pictures/${photo}" id="photo-${markerId}-${photo}" style="width: 50px; height: 50px; object-fit: cover; cursor: pointer;" onclick="enlargePhoto('${markerId}', '${photo}')">
+                        <br>
+                        <button style="display: block; margin-top: 5px;" onclick="deletePhoto('${markerId}', '${photo}')">Delete</button>
+                    </div>`
+            )
+            .join('');
+    }
+
+    const popupContent = `
+        <strong>Info:</strong> ${info || 'No information provided'}
+        <br>
+        <input type="file" id="photo-upload-${markerId}" name="photos" multiple>
+        <div id="photo-gallery-${markerId}">
+            ${renderPhotoGallery()}
+        </div>
+        <div id="photo-preview-${markerId}" style="margin-top: 20px;"></div> <!-- Enlarged photo preview -->
+        <br>
+        <button onclick="deleteMarker('${markerId}')">Delete Marker</button>
+    `;
+
+    marker.bindPopup(popupContent);
+
+    // Handle popup open event to dynamically attach the file input listener
+    marker.on('popupopen', () => {
+        const fileInput = document.getElementById(`photo-upload-${markerId}`);
+        const photoGallery = document.getElementById(`photo-gallery-${markerId}`);
+
+        if (fileInput) {
+            fileInput.addEventListener('change', async (event) => {
+                const formData = new FormData();
+                Array.from(event.target.files).forEach((file) => {
+                    formData.append('photos', file);
+                });
+
+                try {
+                    const response = await fetch(`${backendUrl}/upload/${markerId}`, {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to upload photos');
+                    }
+                    const data = await response.json();
+                    console.log('Photos uploaded:', data.photos);
+
+                    // Update the photos array and re-render the gallery
+                    photos = [...photos, ...data.photos];
+                    photoGallery.innerHTML = renderPhotoGallery();
+                } catch (error) {
+                    console.error('Error uploading photos:', error);
+                }
+            });
+        }
+    });
+
+    marker.on('dragend', () => {
+        const newLatLng = marker.getLatLng();
+        saveMarker({
+            id: markerId,
+            lat: newLatLng.lat,
+            lng: newLatLng.lng,
+            iconUrl,
+            info,
+        });
+    });
+
+    markersMap.set(markerId, marker);
+
+    if (!id) {
+        saveMarker({
+            id: markerId,
+            lat: latlng.lat,
+            lng: latlng.lng,
+            iconUrl,
+            info,
+        });
+    }
+}
+
+// Function to enlarge the photo in the same popup
+function enlargePhoto(markerId, photo) {
+    const photoPreview = document.getElementById(`photo-preview-${markerId}`);
+    if (photoPreview) {
+        photoPreview.innerHTML = `
+            <img src="/pictures/${photo}" style="width: 100%; max-width: 300px; height: auto; margin-top: 10px;">
+            <p style="text-align: center;">${photo}</p>
+        `;
+    }
+}
+
+// Function to delete a photo
+async function deletePhoto(markerId, photo) {
+    try {
+        const response = await fetch(`${backendUrl}/photos/${markerId}/${photo}`, {
+            method: 'DELETE',
+        });
+        if (!response.ok) {
+            throw new Error('Failed to delete photo');
+        }
+
+        // Remove the photo from the frontend gallery
+        const photoGallery = document.getElementById(`photo-gallery-${markerId}`);
+        if (photoGallery) {
+            const photoElement = document.getElementById(`photo-${markerId}-${photo}`);
+            if (photoElement) {
+                photoElement.parentElement.remove(); // Remove the photo div
+            }
+        }
+
+        console.log(`Photo ${photo} deleted successfully`);
+    } catch (error) {
+        console.error('Error deleting photo:', error);
+    }
+}
+
+
+      document.getElementById("place-marker").addEventListener("click", () => {
+        const iconUrl = document.getElementById("marker-icon").value;
+        const info = document.getElementById("marker-info").value;
+        createMarker(map.getCenter(), iconUrl, null, info);
+      });
+
+      // WebSocket: Listen for updates from the server
+      socket.on("marker-updated", (markers) => {
+        // Remove all existing markers
+        markersMap.forEach((marker, markerId) => {
+          map.removeLayer(marker);
+          markersMap.delete(markerId);
+        });
+
+        // Add updated markers
+        markers.forEach((markerData) => {
+          createMarker(
+            { lat: markerData.lat, lng: markerData.lng },
+            markerData.iconUrl,
+            markerData.id,
+            markerData.info,
+            markerData.photos || []
+          );
+        });
+      });
+
+      // WebSocket: Listen for marker deletions
+      socket.on("marker-deleted", (markerId) => {
+        const marker = markersMap.get(markerId);
+        if (marker) {
+          map.removeLayer(marker);
+          markersMap.delete(markerId);
+        }
+      });
+    </script>
+  </body>
+</html>
